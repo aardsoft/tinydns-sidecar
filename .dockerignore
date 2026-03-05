@@ -1,0 +1,5 @@
+.git
+*.pem
+config.yml
+rebuild.yml
+build/*
