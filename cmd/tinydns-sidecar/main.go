@@ -12,7 +12,15 @@ import (
 
 func main() {
 	// Structured JSON logging for Kubernetes log aggregation.
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slogOpts := &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.MessageKey && len(groups) == 0 {
+				return slog.String("_msg", a.Value.String())
+			}
+			return a
+		},
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, slogOpts)))
 
 	cfgPath := flag.String("config", os.Getenv("TINYDNS_CONFIG"), "path to config file (env: TINYDNS_CONFIG)")
 	flag.Parse()

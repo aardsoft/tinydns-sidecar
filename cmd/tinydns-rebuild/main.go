@@ -101,7 +101,15 @@ func loadConfig(path string) (*Config, error) {
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slogOpts := &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.MessageKey && len(groups) == 0 {
+				return slog.String("_msg", a.Value.String())
+			}
+			return a
+		},
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, slogOpts)))
 
 	cfgPath := flag.String("config", os.Getenv("TINYDNS_REBUILD_CONFIG"), "path to config file (env: TINYDNS_REBUILD_CONFIG)")
 	once := flag.Bool("once", false, "run a single rebuild then exit")
