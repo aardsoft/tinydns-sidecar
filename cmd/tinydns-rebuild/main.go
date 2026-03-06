@@ -67,6 +67,15 @@ type RemoteConfig struct {
 	DataDir string `yaml:"data_dir"`
 	// DataCommand overrides the top-level DataCommand for this remote.
 	DataCommand string `yaml:"data_command,omitempty"`
+	// SyncCommand overrides the default scp-based file transfer when set.
+	// Executed via sh -c. Accepts a single command or a multiline YAML block.
+	// Available environment variables: TINYDNS_DATA_FILE, TINYDNS_REMOTE_HOST,
+	// TINYDNS_REMOTE_USER, TINYDNS_REMOTE_KEY_FILE, TINYDNS_REMOTE_DATA_DIR,
+	// TINYDNS_REMOTE_DATA_COMMAND.
+	SyncCommand string `yaml:"sync_command,omitempty"`
+	// RemoteCommand overrides the default ssh-invoked tinydns-data rebuild when
+	// set.  Executed via sh -c.  Same environment variables as SyncCommand.
+	RemoteCommand string `yaml:"remote_command,omitempty"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -246,12 +255,40 @@ func runDataCommand(dir, command string) error {
 	return nil
 }
 
+// runShellCommand executes script via sh -c with extra appended to the process
+// environment.  Returns combined stdout+stderr output and any error.
+func runShellCommand(script string, extra []string) (string, error) {
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = append(os.Environ(), extra...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	return out.String(), err
+}
+
 // distribute copies the assembled data file to a remote host and runs
-// tinydns-data there.  Requires ssh and scp in $PATH.
+// tinydns-data there.  Requires ssh and scp in $PATH unless sync_command /
+// remote_command overrides are configured.
 func distribute(cfg *Config, r RemoteConfig) error {
 	target := r.Host
 	if r.User != "" {
 		target = r.User + "@" + r.Host
+	}
+
+	dataCmd := r.DataCommand
+	if dataCmd == "" {
+		dataCmd = cfg.DataCommand
+	}
+
+	// Environment variables available to sync_command and remote_command.
+	env := []string{
+		"TINYDNS_DATA_FILE=" + cfg.DataFile,
+		"TINYDNS_REMOTE_HOST=" + r.Host,
+		"TINYDNS_REMOTE_USER=" + r.User,
+		"TINYDNS_REMOTE_KEY_FILE=" + r.KeyFile,
+		"TINYDNS_REMOTE_DATA_DIR=" + r.DataDir,
+		"TINYDNS_REMOTE_DATA_COMMAND=" + dataCmd,
 	}
 
 	sshArgs := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"}
@@ -260,29 +297,45 @@ func distribute(cfg *Config, r RemoteConfig) error {
 	}
 
 	// Push the data file.
-	remotePath := target + ":" + filepath.Join(r.DataDir, filepath.Base(cfg.DataFile))
-	scpArgs := append(sshArgs, cfg.DataFile, remotePath)
-	scpCmd := exec.Command("scp", scpArgs...)
-	var scpOut bytes.Buffer
-	scpCmd.Stdout = &scpOut
-	scpCmd.Stderr = &scpOut
-	if err := scpCmd.Run(); err != nil {
-		return fmt.Errorf("scp to %s: %w; output: %s", r.Host, err, scpOut.String())
+	if r.SyncCommand != "" {
+		out, err := runShellCommand(r.SyncCommand, env)
+		if err != nil {
+			return fmt.Errorf("sync_command to %s: %w; output: %s", r.Host, err, out)
+		}
+		if out != "" {
+			slog.Info("sync command output", "host", r.Host, "output", out)
+		}
+	} else {
+		remotePath := target + ":" + filepath.Join(r.DataDir, filepath.Base(cfg.DataFile))
+		scpArgs := append(append([]string{}, sshArgs...), cfg.DataFile, remotePath)
+		scpCmd := exec.Command("scp", scpArgs...)
+		var scpOut bytes.Buffer
+		scpCmd.Stdout = &scpOut
+		scpCmd.Stderr = &scpOut
+		if err := scpCmd.Run(); err != nil {
+			return fmt.Errorf("scp to %s: %w; output: %s", r.Host, err, scpOut.String())
+		}
 	}
 
 	// Run tinydns-data on the remote.
-	dataCmd := r.DataCommand
-	if dataCmd == "" {
-		dataCmd = cfg.DataCommand
-	}
-	remoteCmd := fmt.Sprintf("cd %s && %s", r.DataDir, dataCmd)
-	sshRunArgs := append(sshArgs, target, remoteCmd)
-	sshCmd := exec.Command("ssh", sshRunArgs...)
-	var sshOut bytes.Buffer
-	sshCmd.Stdout = &sshOut
-	sshCmd.Stderr = &sshOut
-	if err := sshCmd.Run(); err != nil {
-		return fmt.Errorf("ssh %s %q: %w; output: %s", r.Host, remoteCmd, err, sshOut.String())
+	if r.RemoteCommand != "" {
+		out, err := runShellCommand(r.RemoteCommand, env)
+		if err != nil {
+			return fmt.Errorf("remote_command on %s: %w; output: %s", r.Host, err, out)
+		}
+		if out != "" {
+			slog.Info("remote command output", "host", r.Host, "output", out)
+		}
+	} else {
+		remoteCmd := fmt.Sprintf("cd %s && %s", r.DataDir, dataCmd)
+		sshRunArgs := append(append([]string{}, sshArgs...), target, remoteCmd)
+		sshCmd := exec.Command("ssh", sshRunArgs...)
+		var sshOut bytes.Buffer
+		sshCmd.Stdout = &sshOut
+		sshCmd.Stderr = &sshOut
+		if err := sshCmd.Run(); err != nil {
+			return fmt.Errorf("ssh %s %q: %w; output: %s", r.Host, remoteCmd, err, sshOut.String())
+		}
 	}
 
 	slog.Info("remote rebuild complete", "host", r.Host)
