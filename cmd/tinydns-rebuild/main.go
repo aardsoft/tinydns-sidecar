@@ -50,6 +50,10 @@ type Config struct {
 	// for changes.  Defaults to 5.
 	PollInterval int `yaml:"poll_interval"`
 
+	// Debug enables verbose logging of the exact commands and environment
+	// variables used during sync and remote operations.
+	Debug bool `yaml:"debug,omitempty"`
+
 	// Remotes lists remote nameservers to update after a successful local
 	// rebuild.  Requires ssh and scp to be available in $PATH.
 	Remotes []RemoteConfig `yaml:"remotes,omitempty"`
@@ -122,12 +126,16 @@ func main() {
 
 	cfgPath := flag.String("config", os.Getenv("TINYDNS_REBUILD_CONFIG"), "path to config file (env: TINYDNS_REBUILD_CONFIG)")
 	once := flag.Bool("once", false, "run a single rebuild then exit")
+	debug := flag.Bool("debug", false, "log exact commands and env vars for sync/remote operations")
 	flag.Parse()
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		slog.Error("loading config", "error", err)
 		os.Exit(1)
+	}
+	if *debug {
+		cfg.Debug = true
 	}
 
 	if *once {
@@ -257,7 +265,10 @@ func runDataCommand(dir, command string) error {
 
 // runShellCommand executes script via sh -c with extra appended to the process
 // environment.  Returns combined stdout+stderr output and any error.
-func runShellCommand(script string, extra []string) (string, error) {
+func runShellCommand(script string, extra []string, debug bool) (string, error) {
+	if debug {
+		slog.Info("shell command", "script", script, "env", extra)
+	}
 	cmd := exec.Command("sh", "-c", script)
 	cmd.Env = append(os.Environ(), extra...)
 	var out bytes.Buffer
@@ -298,7 +309,7 @@ func distribute(cfg *Config, r RemoteConfig) error {
 
 	// Push the data file.
 	if r.SyncCommand != "" {
-		out, err := runShellCommand(r.SyncCommand, env)
+		out, err := runShellCommand(r.SyncCommand, env, cfg.Debug)
 		if err != nil {
 			return fmt.Errorf("sync_command to %s: %w; output: %s", r.Host, err, out)
 		}
@@ -308,6 +319,9 @@ func distribute(cfg *Config, r RemoteConfig) error {
 	} else {
 		remotePath := target + ":" + filepath.Join(r.DataDir, filepath.Base(cfg.DataFile))
 		scpArgs := append(append([]string{}, sshArgs...), cfg.DataFile, remotePath)
+		if cfg.Debug {
+			slog.Info("scp command", "args", append([]string{"scp"}, scpArgs...))
+		}
 		scpCmd := exec.Command("scp", scpArgs...)
 		var scpOut bytes.Buffer
 		scpCmd.Stdout = &scpOut
@@ -319,7 +333,7 @@ func distribute(cfg *Config, r RemoteConfig) error {
 
 	// Run tinydns-data on the remote.
 	if r.RemoteCommand != "" {
-		out, err := runShellCommand(r.RemoteCommand, env)
+		out, err := runShellCommand(r.RemoteCommand, env, cfg.Debug)
 		if err != nil {
 			return fmt.Errorf("remote_command on %s: %w; output: %s", r.Host, err, out)
 		}
@@ -329,6 +343,9 @@ func distribute(cfg *Config, r RemoteConfig) error {
 	} else {
 		remoteCmd := fmt.Sprintf("cd %s && %s", r.DataDir, dataCmd)
 		sshRunArgs := append(append([]string{}, sshArgs...), target, remoteCmd)
+		if cfg.Debug {
+			slog.Info("ssh command", "args", append([]string{"ssh"}, sshRunArgs...))
+		}
 		sshCmd := exec.Command("ssh", sshRunArgs...)
 		var sshOut bytes.Buffer
 		sshCmd.Stdout = &sshOut
