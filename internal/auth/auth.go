@@ -6,9 +6,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+// safeKeyIDRE accepts only printable ASCII characters that are safe in both
+// map keys and filesystem paths.  This prevents control characters,
+// path-traversal sequences, and header-parsing ambiguity.
+var safeKeyIDRE = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // ParsedHeader holds the fields extracted from an Authorization header.
 type ParsedHeader struct {
@@ -46,6 +52,9 @@ func ParseAuthHeader(header string) (ParsedHeader, error) {
 	keyID, ok := fields["keyId"]
 	if !ok || keyID == "" {
 		return ParsedHeader{}, fmt.Errorf("missing keyId")
+	}
+	if !safeKeyIDRE.MatchString(keyID) {
+		return ParsedHeader{}, fmt.Errorf("keyId contains invalid characters")
 	}
 	tsStr, ok := fields["timestamp"]
 	if !ok {
