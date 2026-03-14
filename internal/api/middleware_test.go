@@ -71,51 +71,52 @@ func testServer(t *testing.T, allowedPriv, noReplacePriv ed25519.PrivateKey, all
 	return NewServer(cfg, noopStore{})
 }
 
-// --- zoneAuthMiddleware security tests ---
+// --- zoneAuthMiddleware ordering tests ---
 
-// TestZoneAuth_SigBeforeZoneAuthz verifies that an invalid signature is
-// rejected (401) before zone authorization is checked.
-// Without this ordering an attacker with a known key-id could probe zone
-// memberships without possessing the matching private key.
-func TestZoneAuth_SigBeforeZoneAuthz(t *testing.T) {
+// TestZoneAuth_UnauthorizedZoneFastFail verifies that a key requesting a zone
+// it is not authorized for receives 403 immediately, even when the signature is
+// invalid.  This confirms the "fail fast" design: cheap authorization checks
+// run before expensive Ed25519 signature verification.
+func TestZoneAuth_UnauthorizedZoneFastFail(t *testing.T) {
 	_, allowedPriv, allowedPub := generateTestKey(t)
 	_, noReplacePriv, noReplacePub := generateTestKey(t)
 	s := testServer(t, allowedPriv, noReplacePriv, allowedPub, noReplacePub)
 
 	body := []byte("")
-	// Use a real-looking but WRONG signature (garbage bytes, correct length).
+	// Bad signature — but zone authorization should fail first.
 	badSig := make([]byte, ed25519.SignatureSize)
 	_, _ = rand.Read(badSig)
 	badSigB64 := base64.RawURLEncoding.EncodeToString(badSig)
+	// "allowed-key" is only authorized for "example.com", not "other.com".
 	hdr := fmt.Sprintf(`TinyDNS-Sig keyId="allowed-key",timestamp="%d",signature="%s"`,
 		time.Now().Unix(), badSigB64)
 
-	// Zone that the key IS authorized for, but the signature is bad.
-	req := httptest.NewRequest(http.MethodPut, "/zones/example.com", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/zones/other.com", bytes.NewReader(body))
 	req.Header.Set("Authorization", hdr)
 	req.Header.Set("Content-Type", "application/yaml")
 	rr := httptest.NewRecorder()
 
 	s.Handler().ServeHTTP(rr, req)
 
-	// Must be 401 (bad sig), NOT 403 (zone/method denied without valid sig).
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401 (invalid signature must be rejected before zone auth)", rr.Code)
+	// Must be 403 (zone not authorized), not 401 (signature invalid).
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (zone authz check runs before sig verification)", rr.Code)
 	}
 }
 
-// TestZoneAuth_SigBeforeMethodAuthz verifies that an invalid signature is
-// rejected (401) before method authorization is checked.
-func TestZoneAuth_SigBeforeMethodAuthz(t *testing.T) {
+// TestZoneAuth_UnauthorizedMethodFastFail verifies that a key lacking the
+// required method permission receives 403 even when the signature is invalid.
+func TestZoneAuth_UnauthorizedMethodFastFail(t *testing.T) {
 	_, allowedPriv, allowedPub := generateTestKey(t)
 	_, noReplacePriv, noReplacePub := generateTestKey(t)
 	s := testServer(t, allowedPriv, noReplacePriv, allowedPub, noReplacePub)
 
 	body := []byte("")
+	// Bad signature — but method authorization should fail first.
 	badSig := make([]byte, ed25519.SignatureSize)
 	_, _ = rand.Read(badSig)
 	badSigB64 := base64.RawURLEncoding.EncodeToString(badSig)
-	// Use "no-replace" key (which lacks AllowReplace) with a bad signature.
+	// "no-replace" key lacks AllowReplace, so PUT to an authorized zone must 403.
 	hdr := fmt.Sprintf(`TinyDNS-Sig keyId="no-replace",timestamp="%d",signature="%s"`,
 		time.Now().Unix(), badSigB64)
 
@@ -126,9 +127,9 @@ func TestZoneAuth_SigBeforeMethodAuthz(t *testing.T) {
 
 	s.Handler().ServeHTTP(rr, req)
 
-	// Must be 401 (bad sig), NOT 403 (method denied without valid sig).
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401 (invalid signature must be rejected before method auth)", rr.Code)
+	// Must be 403 (method not authorized), not 401 (signature invalid).
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (method authz check runs before sig verification)", rr.Code)
 	}
 }
 
@@ -242,11 +243,12 @@ func TestZoneAuth_ValidRequest(t *testing.T) {
 	}
 }
 
-// --- dataAuthMiddleware security tests ---
+// --- dataAuthMiddleware ordering tests ---
 
-// TestDataAuth_SigBeforeMethodAuthz verifies that an invalid signature is
-// rejected (401) before method authorization is checked for the /data endpoint.
-func TestDataAuth_SigBeforeMethodAuthz(t *testing.T) {
+// TestDataAuth_UnauthorizedMethodFastFail verifies that a key lacking
+// allow_raw_upload receives 403 even when the signature is invalid.
+// This confirms the "fail fast" design for the /data endpoint.
+func TestDataAuth_UnauthorizedMethodFastFail(t *testing.T) {
 	_, _, pub := generateTestKey(t)
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -256,7 +258,7 @@ func TestDataAuth_SigBeforeMethodAuthz(t *testing.T) {
 		Keys: map[string]config.KeyConfig{
 			"no-upload": {
 				PublicKey:      pub,
-				AllowRawUpload: false, // would cause 403 if reached
+				AllowRawUpload: false, // missing permission
 			},
 		},
 	}
@@ -275,15 +277,17 @@ func TestDataAuth_SigBeforeMethodAuthz(t *testing.T) {
 
 	s.Handler().ServeHTTP(rr, req)
 
-	// Must be 401 (bad sig), NOT 403 (method denied without valid sig).
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401 (invalid signature must be rejected before method auth)", rr.Code)
+	// Must be 403 (method not authorized), not 401 (signature invalid).
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (method authz check runs before sig verification)", rr.Code)
 	}
 }
 
-// TestZoneAuth_InvalidKeyIDChars verifies that an Authorization header with an
+// TestAuth_InvalidKeyIDChars verifies that an Authorization header with an
 // invalid keyId (containing forbidden characters) is rejected with 401.
-func TestZoneAuth_InvalidKeyIDChars(t *testing.T) {
+// keyId validation is in ParseAuthHeader and applies to all middleware that
+// calls it (zoneAuthMiddleware and dataAuthMiddleware).
+func TestAuth_InvalidKeyIDChars(t *testing.T) {
 	s := &Server{
 		cfg: &config.Config{
 			Server: config.ServerConfig{
