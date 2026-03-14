@@ -24,8 +24,8 @@ var safeZoneRE = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // zoneAuthMiddleware wraps zone handlers (paths with {zone}).
 // It buffers the body, validates and normalises the zone name, checks the
-// timestamp window, looks up the key, enforces zone and method authorization,
-// and verifies the Ed25519 signature.
+// timestamp window, looks up the key, verifies the Ed25519 signature, and
+// then enforces zone and method authorization.
 func (s *Server) zoneAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Buffer body (max 1 MB enforced by server config, re-read for sig).
@@ -66,13 +66,31 @@ func (s *Server) zoneAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 6. Zone authorization.
+		// 6. Signature verification.
+		// Verify before checking zone/method authorization so that authorization
+		// details (which zones or methods a key may access) are never disclosed
+		// to an unauthenticated caller.
+		// Use the normalized zone name in the path so that the canonical string
+		// is identical regardless of the case the client used in the URL.
+		// Clients are expected to normalize zone names to lower-case before signing.
+		normalizedPath := "/zones/" + zoneName
+		ok, err = auth.Verify(keyCfg.PublicKey, parsed.Timestamp, r.Method, normalizedPath, body, parsed.Signature)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "signature verification error: "+err.Error())
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "invalid signature")
+			return
+		}
+
+		// 7. Zone authorization.
 		if !auth.ZoneAllowed(keyCfg.AllowedZones, zoneName) {
 			writeError(w, http.StatusForbidden, "key not authorized for zone")
 			return
 		}
 
-		// 7. Method authorization.
+		// 8. Method authorization.
 		switch r.Method {
 		case http.MethodPut, http.MethodDelete:
 			if !keyCfg.AllowReplace {
@@ -84,20 +102,6 @@ func (s *Server) zoneAuthMiddleware(next http.Handler) http.Handler {
 				writeError(w, http.StatusForbidden, "key does not have allow_merge")
 				return
 			}
-		}
-
-		// 8. Signature verification.
-		// Rebuild path with normalized zone name so the canonical string matches
-		// what the client signed (they should also normalize, but we sign what we receive).
-		path := r.URL.Path
-		ok, err = auth.Verify(keyCfg.PublicKey, parsed.Timestamp, r.Method, path, body, parsed.Signature)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "signature verification error: "+err.Error())
-			return
-		}
-		if !ok {
-			writeError(w, http.StatusUnauthorized, "invalid signature")
-			return
 		}
 
 		// 9. Inject context.
@@ -142,18 +146,10 @@ func (s *Server) dataAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 5. Method authorization (POST requires allow_raw_upload; DELETE requires it too).
-		switch r.Method {
-		case http.MethodPost, http.MethodDelete:
-			if !keyCfg.AllowRawUpload {
-				writeError(w, http.StatusForbidden, "key does not have allow_raw_upload")
-				return
-			}
-		case http.MethodGet:
-			// Any key that can see its own data is fine; no extra flag required.
-		}
-
-		// 6. Signature verification.
+		// 5. Signature verification.
+		// Verify before checking method authorization so that authorization
+		// details (which operations a key may perform) are never disclosed
+		// to an unauthenticated caller.
 		ok, err = auth.Verify(keyCfg.PublicKey, parsed.Timestamp, r.Method, r.URL.Path, body, parsed.Signature)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "signature verification error: "+err.Error())
@@ -162,6 +158,17 @@ func (s *Server) dataAuthMiddleware(next http.Handler) http.Handler {
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "invalid signature")
 			return
+		}
+
+		// 6. Method authorization (POST requires allow_raw_upload; DELETE requires it too).
+		switch r.Method {
+		case http.MethodPost, http.MethodDelete:
+			if !keyCfg.AllowRawUpload {
+				writeError(w, http.StatusForbidden, "key does not have allow_raw_upload")
+				return
+			}
+		case http.MethodGet:
+			// Any key that can see its own data is fine; no extra flag required.
 		}
 
 		// 7. Inject context.
