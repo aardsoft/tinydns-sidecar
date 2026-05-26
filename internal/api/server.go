@@ -52,6 +52,12 @@ func (s *Server) Handler() http.Handler {
 	// Not gated: always reachable so clients can discover the server's format.
 	mux.Handle("GET /capabilities", dataMW(http.HandlerFunc(s.handleGetCapabilities)))
 
+	// ACME webhook routes — used by cert-manager dns-01 solver.
+	// Requests must include an authToken matching server.acme_token in the
+	// JSON config field.  If acme_token is unset, these endpoints return 401.
+	mux.HandleFunc("POST /acme/present", s.handleACMEPresent)
+	mux.HandleFunc("POST /acme/cleanup", s.handleACMECleanup)
+
 	return loggingMiddleware(mux)
 }
 

@@ -8,9 +8,10 @@ import (
 )
 
 type Config struct {
-	Server  ServerConfig        `yaml:"server"`
-	Storage StorageConfig       `yaml:"storage"`
-	Keys    map[string]KeyConfig `yaml:"keys"`
+	Server   ServerConfig         `yaml:"server"`
+	Storage  StorageConfig        `yaml:"storage"`
+	Keys     map[string]KeyConfig `yaml:"keys"`
+	ACMEKeys map[string]ACMEKeyConfig `yaml:"acme_keys,omitempty"`
 }
 
 type ServerConfig struct {
@@ -45,6 +46,15 @@ type KeyConfig struct {
 	// any previously stored files in the other format on each successful write.
 	// Leave empty for no restriction (backwards-compatible default).
 	Format string `yaml:"format"`
+}
+
+// ACMEKeyConfig holds credentials for a cert-manager ACME webhook client.
+type ACMEKeyConfig struct {
+	// Shared secret the client must supply in config.authToken.
+	Token string `yaml:"token"`
+	// Zones this token may manage ACME challenges for.
+	// Same semantics as KeyConfig.AllowedZones.
+	AllowedZones []string `yaml:"allowed_zones"`
 }
 
 func Load(path string) (*Config, error) {
