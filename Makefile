@@ -1,6 +1,6 @@
-.PHONY: build build-all build-linux test clean fmt vet deps docker-image docker-image-standalone docker-image-rebuild help
+.PHONY: build build-all build-linux build-webhook build-webhook-linux test clean fmt vet deps docker-image docker-image-standalone docker-image-webhook docker-image-rebuild help
 
-BINARIES := tinydns-sidecar tinydns-client tinydns-rebuild
+BINARIES := tinydns-sidecar tinydns-client tinydns-rebuild cert-manager-webhook-tinydns
 
 OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 ARCH := $(shell uname -m)
@@ -19,16 +19,23 @@ LDFLAGS := -ldflags="-s -w -X main.version=$(VERSION)"
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build all binaries for the current platform
+build: build-webhook ## Build all binaries for the current platform
 	go build $(LDFLAGS) -o ./build/tinydns-sidecar-$(OS)-$(ARCH)  ./cmd/tinydns-sidecar
 	go build $(LDFLAGS) -o ./build/tinydns-client-$(OS)-$(ARCH)   ./cmd/tinydns-client
 	go build $(LDFLAGS) -o ./build/tinydns-rebuild-$(OS)-$(ARCH)  ./cmd/tinydns-rebuild
 
-build-linux: ## Build all binaries for linux/amd64 and linux/arm64 (prerequisite for docker-image)
+build-webhook: ## Build webhook binary for the current platform
+	cd cert-manager-webhook-tinydns && go build $(LDFLAGS) -o ../build/cert-manager-webhook-tinydns-$(OS)-$(ARCH) .
+
+build-linux: build-webhook-linux ## Build all binaries for linux/amd64 and linux/arm64 (prerequisite for docker-image)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o ./build/tinydns-sidecar-linux-amd64  ./cmd/tinydns-sidecar
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o ./build/tinydns-sidecar-linux-arm64  ./cmd/tinydns-sidecar
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o ./build/tinydns-rebuild-linux-amd64  ./cmd/tinydns-rebuild
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o ./build/tinydns-rebuild-linux-arm64  ./cmd/tinydns-rebuild
+
+build-webhook-linux: ## Build webhook binary for linux/amd64 and linux/arm64
+	cd cert-manager-webhook-tinydns && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o ../build/cert-manager-webhook-tinydns-linux-amd64 .
+	cd cert-manager-webhook-tinydns && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o ../build/cert-manager-webhook-tinydns-linux-arm64 .
 
 build-all: ## Build all binaries for all platforms
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o ./build/tinydns-sidecar-linux-amd64        ./cmd/tinydns-sidecar
@@ -45,6 +52,8 @@ build-all: ## Build all binaries for all platforms
 	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o ./build/tinydns-client-windows-arm64.exe   ./cmd/tinydns-client
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o ./build/tinydns-rebuild-linux-amd64        ./cmd/tinydns-rebuild
 	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build $(LDFLAGS) -o ./build/tinydns-rebuild-linux-arm64        ./cmd/tinydns-rebuild
+	cd cert-manager-webhook-tinydns && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o ../build/cert-manager-webhook-tinydns-linux-amd64 .
+	cd cert-manager-webhook-tinydns && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o ../build/cert-manager-webhook-tinydns-linux-arm64 .
 
 test: ## Run tests
 	go test -v ./...

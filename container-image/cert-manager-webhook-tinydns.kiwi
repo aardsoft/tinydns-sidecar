@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<image schemaversion="7.5" name="cert-manager-webhook-tinydns">
+    <description type="system">
+        <author>Bernd Wachter</author>
+        <contact>bwachter-kiwi@aardsoft.fi</contact>
+        <specification>cert-manager webhook for tinydns-sidecar</specification>
+    </description>
+    <preferences>
+        <type image="docker" derived_from="ghcr.io/aardsoft/leap16-base:latest">
+          <containerconfig name="ghcr.io/aardsoft/cert-manager-webhook-tinydns" tag="0.1" additionalnames=":latest">
+            <subcommand execute="/usr/bin/cert-manager-webhook-tinydns"/>
+          </containerconfig>
+        </type>
+        <version>0.0.1</version>
+        <packagemanager>zypper</packagemanager>
+        <rpm-excludedocs>true</rpm-excludedocs>
+    </preferences>
+    <repository type="rpm-md">
+        <source path="obsrepositories:/"/>
+    </repository>
+    <packages type="image">
+      <package name="ca-certificates"/>
+    </packages>
+</image>
