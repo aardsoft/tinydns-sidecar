@@ -26,6 +26,9 @@ var safeZoneRE = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 // It buffers the body, validates and normalises the zone name, checks the
 // timestamp window, looks up the key, enforces zone and method authorization,
 // and verifies the Ed25519 signature.
+// Authorization checks (cheap map/flag lookups) are performed before the
+// signature verification (Ed25519 crypto) so that unauthorized requests fail
+// fast without paying the cryptographic cost.
 func (s *Server) zoneAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Buffer body (max 1 MB enforced by server config, re-read for sig).
@@ -87,10 +90,11 @@ func (s *Server) zoneAuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 8. Signature verification.
-		// Rebuild path with normalized zone name so the canonical string matches
-		// what the client signed (they should also normalize, but we sign what we receive).
-		path := r.URL.Path
-		ok, err = auth.Verify(keyCfg.PublicKey, parsed.Timestamp, r.Method, path, body, parsed.Signature)
+		// Use the normalized zone name in the path so that the canonical string
+		// is identical regardless of the case the client used in the URL.
+		// Clients are expected to normalize zone names to lower-case before signing.
+		normalizedPath := "/zones/" + zoneName
+		ok, err = auth.Verify(keyCfg.PublicKey, parsed.Timestamp, r.Method, normalizedPath, body, parsed.Signature)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "signature verification error: "+err.Error())
 			return
@@ -109,6 +113,8 @@ func (s *Server) zoneAuthMiddleware(next http.Handler) http.Handler {
 
 // dataAuthMiddleware wraps /data handlers.
 // No zone name or zone authorization — the key ID itself scopes the resource.
+// Method authorization (cheap flag lookup) runs before signature verification
+// (Ed25519 crypto) so that unauthorized requests fail fast.
 func (s *Server) dataAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Buffer body.

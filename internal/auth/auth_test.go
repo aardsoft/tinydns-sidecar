@@ -74,6 +74,62 @@ func TestParseAuthHeader_ShortSignature(t *testing.T) {
 	}
 }
 
+func TestParseAuthHeader_InvalidKeyIDChars(t *testing.T) {
+	sig := make([]byte, 64)
+	_, _ = rand.Read(sig)
+	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
+
+	cases := []struct {
+		name  string
+		keyID string
+	}{
+		{"slash", "my/key"},
+		{"backslash", `my\key`},
+		{"dotdot", "../etc/passwd"},
+		{"space", "my key"},
+		{"at", "my@key"},
+		{"comma", "my,key"},
+		{"quote", `my"key`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hdr := fmt.Sprintf(`TinyDNS-Sig keyId="%s",timestamp="1700000000",signature="%s"`, tc.keyID, sigB64)
+			_, err := ParseAuthHeader(hdr)
+			if err == nil {
+				t.Fatalf("expected error for keyId %q", tc.keyID)
+			}
+		})
+	}
+}
+
+func TestParseAuthHeader_ValidKeyIDs(t *testing.T) {
+	sig := make([]byte, 64)
+	_, _ = rand.Read(sig)
+	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
+
+	cases := []string{
+		"mykey",
+		"my-key",
+		"my_key",
+		"my.key",
+		"key123",
+		"KEY",
+		"a",
+	}
+	for _, keyID := range cases {
+		t.Run(keyID, func(t *testing.T) {
+			hdr := fmt.Sprintf(`TinyDNS-Sig keyId="%s",timestamp="1700000000",signature="%s"`, keyID, sigB64)
+			p, err := ParseAuthHeader(hdr)
+			if err != nil {
+				t.Fatalf("unexpected error for keyId %q: %v", keyID, err)
+			}
+			if p.KeyID != keyID {
+				t.Errorf("KeyID = %q, want %q", p.KeyID, keyID)
+			}
+		})
+	}
+}
+
 // --- Verify tests ---
 
 func TestVerify_ValidSignature(t *testing.T) {

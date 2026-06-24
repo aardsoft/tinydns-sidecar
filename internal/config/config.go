@@ -76,5 +76,16 @@ func Load(path string) (*Config, error) {
 		cfg.Server.ClockSkewSeconds = 300
 	}
 
+	// Validate format fields.
+	validFormats := map[string]bool{"": true, "yaml": true, "raw": true}
+	if !validFormats[cfg.Server.Format] {
+		return nil, fmt.Errorf("server.format must be \"yaml\", \"raw\", or empty; got %q", cfg.Server.Format)
+	}
+	for id, kc := range cfg.Keys {
+		if !validFormats[kc.Format] {
+			return nil, fmt.Errorf("keys[%s].format must be \"yaml\", \"raw\", or empty; got %q", id, kc.Format)
+		}
+	}
+
 	return cfg, nil
 }
