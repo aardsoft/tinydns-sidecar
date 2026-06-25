@@ -128,9 +128,13 @@ func (t *tinydnsSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 		out += "\n"
 	}
 
-	// Upload updated raw data.
-	if err := client.postData([]byte(out)); err != nil {
-		return fmt.Errorf("uploading raw data: %w", err)
+	// Upload updated raw data only if there's something to upload.
+	// The sidecar rejects empty POSTs; if all records were removed
+	// there's nothing to update.
+	if len(out) > 0 {
+		if err := client.postData([]byte(out)); err != nil {
+			return fmt.Errorf("uploading raw data: %w", err)
+		}
 	}
 
 	return nil
@@ -197,6 +201,10 @@ func (c *sidecarClient) getData() ([]byte, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		// No raw data exists yet — start with empty.
+		return []byte{}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("sidecar returned %d: %s", resp.StatusCode, string(body))
